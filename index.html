@@ -1,0 +1,184 @@
+<html>
+
+<head>
+    <title>Парсер витягу з ДРРП</title>
+
+    <style>
+        body {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: "Calibri", sans-serif;
+        }
+
+        h1,
+        h2 {
+            text-align: center;
+            margin: 0;
+        }
+
+        #file {
+            display: none;
+        }
+
+        #file-custom {
+            display: block;
+            width: 100%;
+            padding: 30px;
+            border: #888;
+            background-color: #eee;
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border: 1px solid black;
+            padding: 2px 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Парсер витягу з ДРРП</h1>
+    <p>
+        Цей інструмент дозволяє конвертувати інформацію з Витягу з Державного Реєстру Речових Прав у таблицю.<br />
+        Файл обробляється на вашому пристрої і не відправляється на сервер.
+    </p>
+
+    <label for="file" id="file-custom">
+        Оберіть або перетягніть Витяг у форматі PDF
+    </label>
+    <input type="file" id="file" />
+
+    <table id="table"></table>
+
+    <script type="text/javascript">
+        document.getElementById('file').addEventListener('change', fileChange);
+
+        function fileChange(event) {
+            file = event.target.files[0];
+            if (!file) return;
+
+            document.getElementById('file-custom').innerText = "Файл: " + file.name;
+            parseFile(file);
+        }
+
+        async function parseFile(file) {
+            const text = await getPdfText(file);
+            const cleanText = text
+                .replace(/[А-ЯЄІЇ]{4,}/g, word => word.charAt(0).toUpperCase() + word.substr(1).toLowerCase()) // 
+                .replace(/товариство з обмеженою відповідальністю/gi, "ТОВ")
+                .replace(/ЄДРПОУ/gi, "ЄДРПОУ")
+                .replace(/\w{3}-\w{9}/g, "") // Видалити QR-код
+                .replace(/стор\. \d+ з \d+/g, "") // Видалити номера сторінок
+            const objectTexts = getObjectTexts(cleanText);
+            const owners = objectTexts
+                .map(parseOwners)
+                .reduce((a, b) => a.concat(b), []);
+            owners.sort(sortOwners);
+            updateTable(owners);
+        }
+
+        async function getPdfText(file) {
+            const pdfjsLib = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/+esm");
+            pdfjsLib.GlobalWorkerOptions.worker = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.mjs");
+
+            const fileBuffer = await file.arrayBuffer()
+            const pdf = await pdfjsLib.getDocument(fileBuffer).promise;
+
+            let text = "";
+            for (var i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textTokens = await page.getTextContent();
+                const pageText = textTokens.items
+                    .map(t => t.str.trim())
+                    .filter(s => s)
+                    .join(" ");
+                text += pageText;
+            }
+
+            return text;
+        }
+
+        // Розбити витяг на окремі об'єкти у вигляді тексту
+        function getObjectTexts(text) {
+            const matches = text.matchAll(/Актуальна інформація про об’єкт речових прав(.+?)реєстрацію обтяжень/g);
+            return Array.from(matches, m => m[1]);
+        }
+
+        function parseOwners(text) {
+            // Один об'єкт може містити кілька власників
+            const ownerSeparator = "Номер відомостей про речове право";
+            const fragments = text.split(ownerSeparator);
+            const objectText = fragments[0];
+            const ownerTexts = fragments.slice(1).map(s => ownerSeparator + s);
+
+            return ownerTexts.map(ownerText => {
+                const owner = {};
+                // Колонки, що йдуть першими
+                owner["Тип об’єкта"] = null;
+                owner["Номер"] = null;
+                owner["Власник"] = null;
+                owner["Розмір частки"] = null;
+
+                // Об'єкт
+                owner["Загальна площа (кв.м)"] = objectText.match(/Загальна площа \(кв\.м\): ([\d\.]+)/)?.[1];
+                owner["Тип об’єкта"] = objectText.match(/Тип об’єкта: ([^,\s]+)/)?.[1];
+                owner["Адреса"] = objectText.match(/Адреса: (.+?)\s+(Актуальна|Додаткові)/)?.[1];
+                owner["Реєстраційний номер об’єкта нерухомого майна"] = objectText.match(/Реєстраційний номер об’єкта нерухомого майна: (\d+)/)?.[1];
+                owner["Номер"] = owner["Адреса"].match(/(\S+)$/)?.[1];
+
+                // Речове Право
+                owner["Власник"] = ownerText.match(/Власники: (.+?)( Відомості| Актуальна|, причина|$)/)?.[1];
+                owner["Розмір частки"] = ownerText.match(/Розмір частки: ([\d\/]+)/)?.[1];
+                owner["Номер відомостей про речове право"] = ownerText.match(/Номер відомостей про речове право: (\d+)/)?.[1];
+                owner["Дата, час державної реєстрації"] = ownerText.match(/Дата, час державної реєстрації: (\d\d\.\d\d\.\d\d\d\d\ \d\d\:\d\d\:\d\d)/)?.[1];
+
+                return owner;
+            });
+        }
+
+        function updateTable(objects) {
+            const tbody = document.getElementById("table");
+            const columns = Object.keys(objects[0]);
+
+            tbody.replaceChildren();
+
+            const header = tbody.insertRow();
+            for (let column of columns) {
+                const cell = document.createElement("th");
+                cell.innerText = column;
+                header.appendChild(cell);
+            }
+
+            for (let obj of objects) {
+                const row = tbody.insertRow();
+                for (let column of columns) {
+                    const cell = row.insertCell();
+                    cell.innerText = obj[column] ?? "";
+                }
+            }
+        }
+
+        function sortOwners(o1, o2) {
+            if (o1["Тип об’єкта"] > o2["Тип об’єкта"]) {
+                return 1;
+            } else if (o1["Тип об’єкта"] < o2["Тип об’єкта"]) {
+                return -1;
+            }
+
+            n1 = parseInt(o1["Номер"])
+            n2 = parseInt(o2["Номер"])
+            return n1 < n2 ? -1 : 1;
+        }
+    </script>
+</body>
+
+</html>
