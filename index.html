@@ -21,7 +21,7 @@
             display: none;
         }
 
-        #file-custom {
+        #file-label {
             display: block;
             width: 100%;
             padding: 30px;
@@ -52,7 +52,7 @@
         Файл обробляється на вашому пристрої і не відправляється на сервер.
     </p>
 
-    <label for="file" id="file-custom">
+    <label for="file" id="file-label">
         Оберіть або перетягніть Витяг у форматі PDF
     </label>
     <input type="file" id="file" />
@@ -60,17 +60,18 @@
     <table id="table"></table>
 
     <script type="text/javascript">
-        document.getElementById('file').addEventListener('change', fileChange);
+        const fileInput = document.getElementById('file');
+        const fileLabel = document.getElementById('file-label');
 
-        function fileChange(event) {
-            file = event.target.files[0];
-            if (!file) return;
-
-            document.getElementById('file-custom').innerText = "Файл: " + file.name;
-            parseFile(file);
-        }
+        // Support Drag&Drop
+        fileLabel.ondragover = fileLabel.ondragenter = (evt) => evt.preventDefault();
+        fileInput.onchange = event => parseFile(event.target.files[0]);
+        fileLabel.ondrop = event => { parseFile(event.dataTransfer.files[0]); event.preventDefault(); };
 
         async function parseFile(file) {
+            if (!file) return;
+
+            fileLabel.innerText = "Файл: " + file.name;
             const text = await getPdfText(file);
             const cleanText = text
                 .replace(/[А-ЯЄІЇ]{4,}/g, word => word.charAt(0).toUpperCase() + word.substr(1).toLowerCase()) // 
